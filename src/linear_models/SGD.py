@@ -4,6 +4,8 @@ from linear_models.base_model import BaseModel
 from abc import abstractmethod
 from timeit import default_timer as timer
 from errors.convergence import ConvergenceError
+from linear_models.base_model import _convert_dataframe
+import matplotlib.pyplot as plt
 
 
 class _BaseSGD(BaseModel):
@@ -14,7 +16,7 @@ class _BaseSGD(BaseModel):
     def _fit(self, x, y, **kwargs):
         return self._fit_by_sgd(x, y, **kwargs)
 
-    def _fit_by_sgd(self, x, y, verbose=False):
+    def _fit_by_sgd(self, x, y, verbose=False, plot_iterations=False):
         """
         Calculates the gradient of the loss function for linear regression.
 
@@ -23,6 +25,8 @@ class _BaseSGD(BaseModel):
         :return: Vector of parameters for Linear Regression
         """
         assert len(x) == len(y)
+        assert len(np.unique(y) == 2)
+
         # Reset model error calculations
         self.errors = []
         self.iterations = []
@@ -32,7 +36,9 @@ class _BaseSGD(BaseModel):
         # Copy input DataFrame so we don't modify original (may need to change if copy is too expensive)
         intercept_terms = np.ones((x.shape[0], 1))
         x0 = np.hstack((intercept_terms, x.copy()))
-        y0 = y.reshape(len(y), 1)  # Convert y to a column vector
+        self.classes = np.unique(y)
+        y0 = np.asarray([-1 if val == self.classes[0] else 1 for val in y])
+        y0 = y0.reshape(len(y0), 1)  # Convert y to a column vector
 
         betas = np.zeros((len(x0[0]), 1))  # Makes a column vector of zeros
 
@@ -53,11 +59,10 @@ class _BaseSGD(BaseModel):
                     w = w.reshape(1, len(w))
                     prior_betas = betas
                     try:
-                        loss_change = self._change_in_loss(v, w, prior_betas)
+                        loss_change = self.learning_rate * self._change_in_loss(v, w, prior_betas)
                         betas = np.subtract(prior_betas, loss_change)
                     except FloatingPointError:
-                        raise ConvergenceError(
-                            f'SGD failed to converge while being fit. Lower your learning rate and try again.')
+                        raise ConvergenceError()
 
             total_error = np.sqrt(np.sum(np.subtract(betas, pre_epoch_betas) ** 2))
             n_iters_no_change = n_iters_no_change + 1 if total_error < self.epsilon else 0
@@ -70,12 +75,25 @@ class _BaseSGD(BaseModel):
                       f'Total training time: {round(train_time, 3)}')
             self.iterations.append(n_iter)
             self.errors.append(total_error)
+            if plot_iterations:
+                self.coef = betas[1:]
+                self.intercept = betas[0][0] if self.fit_intercept else 0
+                domain = np.arange(min(x), max(x))[:, None]
+                predictions = self.intercept + np.dot(domain, self.coef)
+                colors = ['red' if clz == 0 else 'blue' for clz in y]
+                plt.scatter(x, y, c=colors)
+                plt.plot(domain, predictions)
+                plt.show()
 
         self.coef = betas[1:]
         self.intercept = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
         if verbose:
             print(f'SGD converged after {n_iter} epochs.\n'
                   f'Total Training Time: {round(train_time, 3)} sec.')
+
+        if n_iter == self.max_iters and self.errors[-1] > self.epsilon:
+            print(f'SGD did not converge after {self.max_iters} epochs. Increase max_iters for a better model.')
+
         return self
 
 
@@ -136,7 +154,7 @@ class SGDClassifier(_BaseSGD):
             penalty='l2',
             max_iters=1000,
             max_iters_no_change=5,
-            fit_intercept=True,
+            fit_intercept=False,
             alpha=1e-4,
             loss='hinge'):
         super(SGDClassifier, self).__init__()
@@ -170,13 +188,14 @@ class SGDClassifier(_BaseSGD):
             reg_term = np.multiply(self.alpha / len(b), b)
             reg_term[0] = 0
 
-            change_in_loss = self.learning_rate * np.dot(np.subtract(p, y), x).T
+            change_in_loss = -np.dot(np.subtract(y, p), x).T
             return change_in_loss + reg_term
+
         elif self.loss == 'hinge':
-            return NotImplementedError
+            xb = x.dot(b)[0][0]
+            return b - y.dot(x).T if y.dot(xb) < 1 else b
 
     def predict(self, x):
-        print(f'Intercept: {self.intercept}')
-        print(f'Coef: {self.coef}')
-        linear_val = self.intercept + np.dot(x, self.coef)
-        return [0 if val <= 0 else 1 for val in linear_val]
+        x0 = _convert_dataframe(x)
+        linear_val = self.intercept + np.dot(x0, self.coef)
+        return [self.classes[0] if val <= 0 else self.classes[1] for val in linear_val]

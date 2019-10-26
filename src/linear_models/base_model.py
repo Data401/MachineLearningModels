@@ -14,7 +14,12 @@ def _convert_dataframe(x):
     :return: ndarray
     """
     try:
-        return x if isinstance(x, np.ndarray) else x.to_numpy()
+        if isinstance(x, np.ndarray):
+            return x
+        elif isinstance(x, list) or isinstance(x, pd.Series):
+            return np.asmatrix(x).reshape((len(x), 1))
+        else:
+            return x.to_numpy().reshape(len(x), len(x.columns))
     except NameError:
         print(f'Invalid input. Input must be either Pandas DataFrame or Numpy ndarray.')
 
@@ -112,17 +117,16 @@ class BaseModel(abc.ABC):
 
             :parameter x - Pandas DataFrame of data you want to make predictions about.
         """
-        x0 = _convert_dataframe(x)
         if self.intercept is None or self.coef is None:
             print(f'Unable to make predictions until the model is fit. Please use fit() first.')
             return
-        elif len(x0[0]) != len(self.coef):
-            print(f'Column mismatch. Expected(,{len(self.coef)}) but was {np.shape(x0)}')
+        elif len(x[0]) != len(self.coef):
+            print(f'Column mismatch. Expected(,{len(self.coef)}) but was {np.shape(x)}')
             return
         else:
             slopes = self.coef
 
-            return [(self.intercept + row.dot(slopes)) for row in x0]
+            return [(self.intercept + row.dot(slopes)) for row in x]
 
     def score(self, x, y, metric='adj'):
         """
@@ -132,15 +136,16 @@ class BaseModel(abc.ABC):
         :param y - Pandas DataFrame dependent variables.
         :param metric - Scoring metric to use. Default is adjusted R^2. Can be one of: 'adj', 'r2', 'aic', 'bic'
         """
-        predicted = self.predict(x)
+        x0 = _convert_dataframe(x)
+        predicted = self.predict(x0)
         y0 = _convert_dataframe(y).T
         if metric == 'adj':
             # 1 - (1 - R^2)(n-1/n-k-1)
             ssr = ((y0 - predicted) ** 2).sum()
             sst = ((y0 - y0.mean()) ** 2).sum()
             r2 = 1 - (ssr / sst)
-            n = len(x)  # Number of observations
-            p = len(x[0])  # Number of predictor variables
+            n = len(x0)  # Number of observations
+            p = len(x0[0])  # Number of predictor variables
             return 1 - (1 - r2 * (n - 1) / (n - p - 1))
         elif metric == 'r2':
             ssr = ((y0 - predicted) ** 2).sum()
