@@ -25,8 +25,6 @@ class _BaseSGD(BaseModel):
         :return: Vector of parameters for Linear Regression
         """
         assert len(x) == len(y)
-        assert len(np.unique(y) == 2)
-
         # Reset model error calculations
         self.errors = []
         self.iterations = []
@@ -36,9 +34,7 @@ class _BaseSGD(BaseModel):
         # Copy input DataFrame so we don't modify original (may need to change if copy is too expensive)
         intercept_terms = np.ones((x.shape[0], 1))
         x0 = np.hstack((intercept_terms, x.copy()))
-        self.classes = np.unique(y)
-        y0 = np.asarray([-1 if val == self.classes[0] else 1 for val in y])
-        y0 = y0.reshape(len(y0), 1)  # Convert y to a column vector
+        y0 = y.reshape(len(y), 1)  # Convert y to a column vector
 
         betas = np.zeros((len(x0[0]), 1))  # Makes a column vector of zeros
 
@@ -198,4 +194,25 @@ class SGDClassifier(_BaseSGD):
     def predict(self, x):
         x0 = _convert_dataframe(x)
         linear_val = self.intercept + np.dot(x0, self.coef)
-        return [self.classes[0] if val <= 0 else self.classes[1] for val in linear_val]
+        return self.classes[(linear_val > 0).astype(int)].T
+
+    def score(self, x, y, metric=None):
+        return np.mean(self.predict(x) == y)
+
+    def _fit(self, x, y, **kwargs):
+        assert len(np.unique(y) == 2)
+        self.classes = np.unique(y)
+
+        if self.loss == 'hinge':
+            y0 = np.asarray([-1 if val == self.classes[0] else 1 for val in y])
+        elif self.loss == 'log':
+            y0 = np.asarray([0 if val == self.classes[0] else 1 for val in y])
+        else:
+            return NotImplementedError
+
+        return super()._fit(x, y0, **kwargs)
+
+
+
+
+
