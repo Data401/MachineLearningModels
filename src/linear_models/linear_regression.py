@@ -1,5 +1,5 @@
 import numpy as np
-from src.linear_models import BaseModel
+from linear_models.base_model import BaseModel
 
 
 class LinearRegressionModel(BaseModel):
@@ -20,9 +20,9 @@ class LinearRegressionModel(BaseModel):
            :parameter x - Pandas DataFrame containing explanatory variables
            :parameter y - Pandas DataFrame containing response variables
         """
-        return self._fit_by_mle(x, y)
+        return self._fit(x, y)
 
-    def _fit_by_mle(self, x, y):
+    def _fit(self, x, y, **kwargs):
         # Using qr factorization
         # qr = x and z = Q^T y yields r betas = z
         q, r = np.linalg.qr(x)
