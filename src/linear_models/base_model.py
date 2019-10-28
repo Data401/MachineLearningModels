@@ -27,8 +27,8 @@ def _convert_dataframe(x):
 class BaseModel(abc.ABC):
     def __init__(self, **kwargs):
         # Model Definition
-        self.coef = None
-        self.intercept = None
+        self.coef_ = None
+        self.intercept_ = None
 
         # Model Parameters
         self.method = None
@@ -38,6 +38,7 @@ class BaseModel(abc.ABC):
         self.max_iters = None
         self.max_iters_no_change = None
         self.fit_intercept = None
+        self.num_workers = None
 
         # Extra metrics
         self.errors = []
@@ -69,14 +70,14 @@ class BaseModel(abc.ABC):
         :parameter y - y values
         """
 
-        if self.coef is None:
+        if self.coef_ is None:
             print(f'Model must be fit before a plot can be generated. Please use fit() first.')
 
         domain = pd.DataFrame(np.arange(np.min(x).iloc[0], np.max(x).iloc[0] + 1))
         predictions = self.predict(domain)
         plt.plot(domain, predictions)
         plt.text(np.mean(x).iloc[0], np.max(predictions),
-                 f'y = {np.round(self.intercept, 3)} + {np.round(self.coef[0], 3)}x',
+                 f'y = {np.round(self.intercept_, 3)} + {np.round(self.coef_[0], 3)}x',
                  horizontalalignment='center',
                  verticalalignment='center',
                  bbox=dict(facecolor='blue', alpha=0.25))
@@ -117,16 +118,16 @@ class BaseModel(abc.ABC):
 
             :parameter x - Pandas DataFrame of data you want to make predictions about.
         """
-        if self.intercept is None or self.coef is None:
+        if self.intercept_ is None or self.coef_ is None:
             print(f'Unable to make predictions until the model is fit. Please use fit() first.')
             return
-        elif len(x[0]) != len(self.coef):
-            print(f'Column mismatch. Expected(,{len(self.coef)}) but was {np.shape(x)}')
+        elif len(x[0]) != len(self.coef_):
+            print(f'Column mismatch. Expected(,{len(self.coef_)}) but was {np.shape(x)}')
             return
         else:
-            slopes = self.coef
+            slopes = self.coef_
 
-            return [(self.intercept + row.dot(slopes)) for row in x]
+            return [(self.intercept_ + row.dot(slopes)) for row in x]
 
     def score(self, x, y, metric='adj'):
         """

@@ -7,8 +7,11 @@ from errors.convergence import ConvergenceError
 from linear_models.base_model import _convert_dataframe
 import matplotlib.pyplot as plt
 
+from plotting_utils import plot_2d_decision_boundary, plot_contours, make_meshgrid
+
 
 class _BaseSGD(BaseModel):
+
     @abstractmethod
     def _change_in_loss(self, x, y, b):
         pass
@@ -16,7 +19,7 @@ class _BaseSGD(BaseModel):
     def _fit(self, x, y, **kwargs):
         return self._fit_by_sgd(x, y, **kwargs)
 
-    def _fit_by_sgd(self, x, y, verbose=False, plot_iterations=False):
+    def _fit_by_sgd(self, x, y, verbose=0, plot_iterations=False):
         """
         Calculates the gradient of the loss function for linear regression.
 
@@ -25,12 +28,15 @@ class _BaseSGD(BaseModel):
         :return: Vector of parameters for Linear Regression
         """
         assert len(x) == len(y)
+
         # Reset model error calculations
         self.errors = []
         self.iterations = []
 
+        # Setup Debugging/ Graphing
         start_time = timer()
         train_time = 0
+
         # Copy input DataFrame so we don't modify original (may need to change if copy is too expensive)
         intercept_terms = np.ones((x.shape[0], 1))
         x0 = np.hstack((intercept_terms, x.copy()))
@@ -64,26 +70,23 @@ class _BaseSGD(BaseModel):
             n_iters_no_change = n_iters_no_change + 1 if total_error < self.epsilon else 0
             n_iter += 1
             train_time = timer() - start_time
-            if verbose:
-                print(f'-- Epoch {n_iter}\n'
-                      f'Pre Epoch Betas:\n{pre_epoch_betas}\n'
-                      f'Post Epoch Betas:\n{betas}\n'
-                      f'Total training time: {round(train_time, 3)}')
+            if verbose > 0:
+                print(
+                    f'-- Epoch {n_iter}\n'
+                    f'Total training time: {round(train_time, 3)}')
+                if verbose > 1:
+                    print(f'Equation:\n'
+                          f'y = {np.round(betas[1:][0][0], 3)}(x1) + {np.round(betas[1:][1][0], 3)}(x2) + {np.round(betas[0][0], 3)}')
+                if verbose > 2:
+                    print(
+                        f'Pre Epoch Betas:\n{pre_epoch_betas}\n'
+                        f'Post Epoch Betas:\n{betas}\n')
             self.iterations.append(n_iter)
             self.errors.append(total_error)
-            if plot_iterations:
-                self.coef = betas[1:]
-                self.intercept = betas[0][0] if self.fit_intercept else 0
-                domain = np.arange(min(x), max(x))[:, None]
-                predictions = self.intercept + np.dot(domain, self.coef)
-                colors = ['red' if clz == 0 else 'blue' for clz in y]
-                plt.scatter(x, y, c=colors)
-                plt.plot(domain, predictions)
-                plt.show()
 
-        self.coef = betas[1:]
-        self.intercept = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
-        if verbose:
+        self.coef_ = betas[1:]
+        self.intercept_ = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
+        if verbose > 0:
             print(f'SGD converged after {n_iter} epochs.\n'
                   f'Total Training Time: {round(train_time, 3)} sec.')
 
@@ -152,7 +155,8 @@ class SGDClassifier(_BaseSGD):
             max_iters_no_change=5,
             fit_intercept=False,
             alpha=1e-4,
-            loss='hinge'):
+            loss='hinge',
+            C=1):
         super(SGDClassifier, self).__init__()
         self.method = 'SGD'
         self.learning_rate = learning_rate
@@ -163,6 +167,7 @@ class SGDClassifier(_BaseSGD):
         self.max_iters_no_change = max_iters_no_change
         self.fit_intercept = fit_intercept
         self.alpha = alpha
+        self.C = C
 
     def _change_in_loss(self, x, y, b):
         """
@@ -189,28 +194,44 @@ class SGDClassifier(_BaseSGD):
 
         elif self.loss == 'hinge':
             xb = x.dot(b)[0][0]
-            return b - y.dot(x).T if y.dot(xb) < 1 else b
+            return b - self.C * y.dot(x).T if y.dot(xb) < 1 else b
 
     def predict(self, x):
         x0 = _convert_dataframe(x)
-        linear_val = self.intercept + np.dot(x0, self.coef)
-        return self.classes[(linear_val > 0).astype(int)].T
+        return self.classes[(self.decision_function(x0) > 0).astype(int)].T.flatten()
 
     def score(self, x, y, metric=None):
-        return np.mean(self.predict(x) == y)
+        x0 = _convert_dataframe(x)
+        y0 = _convert_dataframe(y)
+        return np.mean(self.predict(x0) == y0)
+
+    def decision_function(self, x):
+        x = _convert_dataframe(x)
+        return self.intercept_ + np.dot(x, self.coef_)
+
+    def decision_boundary(self, x, c=0):
+        b1 = self.coef_[0]
+        b2 = self.coef_[1]
+        return (b1*x + self.intercept_ - c)/-b2
 
     def _fit(self, x, y, **kwargs):
         assert len(np.unique(y) == 2)
-        self.classes = np.unique(y)
-
+        y0 = np.asarray(y).flatten()
+        self.classes = np.unique(y0)
         if self.loss == 'hinge':
-            y0 = np.asarray([-1 if val == self.classes[0] else 1 for val in y])
+            y0 = np.asarray([-1 if val == self.classes[0] else 1 for val in y0])
         elif self.loss == 'log':
-            y0 = np.asarray([0 if val == self.classes[0] else 1 for val in y])
+            y0 = np.asarray([0 if val == self.classes[0] else 1 for val in y0])
         else:
             return NotImplementedError
 
         return super()._fit(x, y0, **kwargs)
+
+    def generate_2d_plot(self, x, y):
+        ax = plt.gca()
+        xx, yy = make_meshgrid(x, y)
+        plot_contours(self, ax, xx, yy)
+        plt.scatter(x[:, 0], x[:, 1], c=y, cmap='winter', edgecolors='k')
 
 
 
