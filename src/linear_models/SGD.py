@@ -19,7 +19,7 @@ class _BaseSGD(BaseModel):
     def _fit(self, x, y, **kwargs):
         return self._fit_by_sgd(x, y, **kwargs)
 
-    def _fit_by_sgd(self, x, y, verbose=0, plot_iterations=False):
+    def _fit_by_sgd(self, x, y, verbose=0):
         """
         Calculates the gradient of the loss function for linear regression.
 
@@ -38,8 +38,12 @@ class _BaseSGD(BaseModel):
         train_time = 0
 
         # Copy input DataFrame so we don't modify original (may need to change if copy is too expensive)
-        intercept_terms = np.ones((x.shape[0], 1))
-        x0 = np.hstack((intercept_terms, x.copy()))
+        if self.fit_intercept:
+            intercept_terms = np.ones((x.shape[0], 1))
+            x0 = np.hstack((intercept_terms, x.copy()))
+        else:
+            x0 = x.copy()
+
         y0 = y.reshape(len(y), 1)  # Convert y to a column vector
 
         betas = np.zeros((len(x0[0]), 1))  # Makes a column vector of zeros
@@ -84,7 +88,7 @@ class _BaseSGD(BaseModel):
             self.iterations.append(n_iter)
             self.errors.append(total_error)
 
-        self.coef_ = betas[1:]
+        self.coef_ = betas[1 if self.fit_intercept else 0:]
         self.intercept_ = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
         if verbose > 0:
             print(f'SGD converged after {n_iter} epochs.\n'
@@ -153,7 +157,7 @@ class SGDClassifier(_BaseSGD):
             penalty='l2',
             max_iters=1000,
             max_iters_no_change=5,
-            fit_intercept=False,
+            fit_intercept=True,
             alpha=1e-4,
             loss='hinge',
             C=1):
@@ -203,7 +207,11 @@ class SGDClassifier(_BaseSGD):
     def score(self, x, y, metric=None):
         x0 = _convert_dataframe(x)
         y0 = _convert_dataframe(y)
-        return np.mean(self.predict(x0) == y0)
+
+        predictions = self.predict(x0)
+        y0 = y0.reshape(predictions.shape)
+
+        return np.mean(predictions == y0)
 
     def decision_function(self, x):
         x = _convert_dataframe(x)
