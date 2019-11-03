@@ -49,20 +49,23 @@ class LDAClassifier(BaseModel):
         w = vectors[:, np.argmax(values)]
 
         self.coef_ = w[:, None]
-        self.intercept_ = 0
+        self.intercept_ = -(mu_0.dot(w) + mu_1.dot(w))/2
         self.means_ = np.asarray((w.dot(mu_0), w.dot(mu_1)))[:, None]
         return self
 
     def predict(self, x):
         scores = self.decision_function(x)
 
-        distance_to_0 = np.abs(scores - self.means_[0])
-        distance_to_1 = np.abs(scores - self.means_[1])
+        distance_to_0 = np.abs(scores - self.means_[0] - self.intercept_)
+        distance_to_1 = np.abs(scores - self.means_[1] - self.intercept_)
 
         return self.classes[(distance_to_1 < distance_to_0).astype(int)]
 
     def score(self, x, y, metric=None):
-        return np.mean(self.predict(x) == y)
+        predictions = self.predict(x)
+        y0 = y.reshape(predictions.shape)
+
+        return np.mean(predictions == y0)
 
     def decision_boundary(self, x):
         w0 = self.coef_[0][0]
@@ -71,7 +74,7 @@ class LDAClassifier(BaseModel):
         return (w0*x + self.intercept_) / -w1
 
     def decision_function(self, x):
-        return x.dot(self.coef_).T.flatten()
+        return (x.dot(self.coef_)).T.flatten() + self.intercept_
 
     def generate_2d_plot(self, x, y):
         plt.subplot(211)
