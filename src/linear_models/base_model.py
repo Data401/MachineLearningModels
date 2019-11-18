@@ -39,6 +39,7 @@ class BaseModel(abc.ABC):
         self.max_iters_no_change = None
         self.fit_intercept = None
         self.num_workers = None
+        self.loss = None
 
         # Extra metrics
         self.errors = []
@@ -98,19 +99,12 @@ class BaseModel(abc.ABC):
 
         plt.plot(self.iterations, self.errors)
 
-    def plot_loss_function(self, x, y):
-        if self.method == 'SGD':
-            plt.title('Loss Function for SGD')
-            plt.xlabel('Predicted Values')
-            plt.ylabel('SSE Loss')
+    def plot_loss(self):
+        plt.title('Loss Function')
+        plt.xlabel('Training Iterations')
+        plt.ylabel('SSE Loss')
 
-            xy = pd.concat([x, y], axis=1)
-            xy = xy.sort_values('X')
-            x0 = xy.iloc[:, 0]
-            y0 = xy.iloc[:, 1]
-            predictions = self.predict(pd.DataFrame(x0))
-            sse = np.subtract(y0.to_numpy(), predictions) ** 2
-            plt.plot(x0, sse)
+        plt.plot(self.iterations, self.loss)
 
     def predict(self, x):
         """
@@ -160,3 +154,7 @@ class BaseModel(abc.ABC):
         else:
             print(f'Unsupported score metric: {metric}')
             pass
+
+    @abstractmethod
+    def _loss(self, x, y):
+        pass

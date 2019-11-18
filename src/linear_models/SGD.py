@@ -11,20 +11,40 @@ from plotting_utils import plot_2d_decision_boundary, plot_contours, make_meshgr
 
 
 class _BaseSGD(BaseModel):
+    batch_size: int = 1
 
     @abstractmethod
-    def _change_in_loss(self, x, y, b):
+    def initialize_weights(self, x):
+        pass
+
+    @abstractmethod
+    def get_weights(self):
+        pass
+
+    @abstractmethod
+    def _update_rule(self, x, y, b):
+        pass
+
+    @abstractmethod
+    def update_model_params(self, params):
         pass
 
     def _fit(self, x, y, **kwargs):
+        # We initialize weights in the model here because the incoming weights for the first hidden layer cannot
+        # be known without knowing the size of the input vector
         return self._fit_by_sgd(x, y, **kwargs)
 
-    def _fit_by_sgd(self, x, y, verbose=0):
+    def _fit_by_sgd(self, x, y, verbose=0, initial_weights=None):
         """
         Calculates the gradient of the loss function for linear regression.
 
         :param x: Column vector of explanatory variables
         :param y: Column vector of dependent variables
+        :param verbose: Int that determines how verbose the output of the fit algorithm is
+        :param initial_weights: Column vector of initial weights if initial weights are non-zero.
+            This also is used for Neural Nets since the weights vector is not a 1D vector. In the case of
+            neural nets, each index in the initial weights should be a matrix containing the weights for the
+            corresponding hidden layer
         :return: Vector of parameters for Linear Regression
         """
         assert len(x) == len(y)
@@ -32,6 +52,7 @@ class _BaseSGD(BaseModel):
         # Reset model error calculations
         self.errors = []
         self.iterations = []
+        self.loss = []
 
         # Setup Debugging/ Graphing
         start_time = timer()
@@ -46,31 +67,40 @@ class _BaseSGD(BaseModel):
 
         y0 = y.reshape(len(y), 1)  # Convert y to a column vector
 
-        betas = np.zeros((len(x0[0]), 1))  # Makes a column vector of zeros
+        self.initialize_weights(x.shape)
+
+        betas = self.get_weights()
 
         n_iter = 0
         n_iters_no_change = 0
-
+        print(betas)
         while n_iters_no_change < self.max_iters_no_change and n_iter < self.max_iters:
             permutation = np.random.permutation(x0.shape[0])
-            x0 = x0[permutation]
-            y0 = y0[permutation]
+            x_batches = np.array_split(x0[permutation], np.ceil(len(x0)/self.batch_size))
+            y_batches = np.array_split(y0[permutation], np.ceil(len(y0)/self.batch_size))
 
             pre_epoch_betas = betas
             # Iterate through all (X, Y) pairs where X is a vector of predictor variables [x1, x2, x3, ...]
             # and Y is a vector containing the response variable
             with np.errstate(invalid='raise'):
-                for v, w in zip(x0, y0):
-                    v = v.reshape(1, len(v))
-                    w = w.reshape(1, len(w))
+                for x_batch, y_batch in zip(x_batches, y_batches):
+                    v = x_batch
+                    w = y_batch.reshape(1, len(y_batch))
                     prior_betas = betas
                     try:
-                        loss_change = self.learning_rate * self._change_in_loss(v, w, prior_betas)
-                        betas = np.subtract(prior_betas, loss_change)
+                        update = self._update_rule(v, w, prior_betas)
+                        loss_change = [np.multiply(self.learning_rate, weight_set) for weight_set in update]
+                        # print(f'Priors: {prior_betas}')
+                        # print(f'Update: {loss_change}\n')
+                        betas = [np.subtract(prior_weight, weight_change)
+                                 for prior_weight, weight_change
+                                 in zip(prior_betas, loss_change)]
                     except FloatingPointError:
                         raise ConvergenceError()
 
-            total_error = np.sqrt(np.sum(np.subtract(betas, pre_epoch_betas) ** 2))
+            total_error = np.sum([np.sum(np.subtract(beta, pre_beta) ** 2)
+                                  for beta, pre_beta
+                                  in zip(betas, pre_epoch_betas)])
             n_iters_no_change = n_iters_no_change + 1 if total_error < self.epsilon else 0
             n_iter += 1
             train_time = timer() - start_time
@@ -85,17 +115,21 @@ class _BaseSGD(BaseModel):
                     print(
                         f'Pre Epoch Betas:\n{pre_epoch_betas}\n'
                         f'Post Epoch Betas:\n{betas}\n')
+            self.update_model_params(betas)
+
             self.iterations.append(n_iter)
+            self.loss.append(self._loss(x, y))
             self.errors.append(total_error)
 
-        self.coef_ = betas[1 if self.fit_intercept else 0:]
-        self.intercept_ = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
+
+        # self.coef_ = betas[1 if self.fit_intercept else 0:]
+        # self.intercept_ = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
         if verbose > 0:
             print(f'SGD converged after {n_iter} epochs.\n'
                   f'Total Training Time: {round(train_time, 3)} sec.')
 
-        if n_iter == self.max_iters and self.errors[-1] > self.epsilon:
-            print(f'SGD did not converge after {self.max_iters} epochs. Increase max_iters for a better model.')
+        # if n_iter == self.max_iters and self.errors[-1] > self.epsilon:
+        #     print(f'SGD did not converge after {self.max_iters} epochs. Increase max_iters for a better model.')
 
         return self
 
@@ -120,7 +154,7 @@ class SGDRegressor(_BaseSGD):
         self.fit_intercept = fit_intercept
         self.alpha = alpha
 
-    def _change_in_loss(self, x, y, b):
+    def _update_rule(self, x, y, b):
         """
         Returns the value of the gradient of the loss function with a regularization term
         dL/dβ = -2η(X.T(y - Xb)
@@ -173,7 +207,7 @@ class SGDClassifier(_BaseSGD):
         self.alpha = alpha
         self.C = C
 
-    def _change_in_loss(self, x, y, b):
+    def _update_rule(self, x, y, b):
         """
         Returns the value of the gradient of the loss function with a L2 regularization term
         The gradient that is calculated by this method is determined by self.loss
@@ -240,8 +274,3 @@ class SGDClassifier(_BaseSGD):
         xx, yy = make_meshgrid(x, y)
         plot_contours(self, ax, xx, yy)
         plt.scatter(x[:, 0], x[:, 1], c=y, cmap='winter', edgecolors='k')
-
-
-
-
-

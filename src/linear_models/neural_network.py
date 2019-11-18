@@ -1,24 +1,78 @@
 from dataclasses import dataclass
 from typing import List, Callable
-from timeit import default_timer as timer
+from functools import partial
+from linear_models.SGD import _BaseSGD
+from abc import ABC, abstractmethod
 import numpy as np
+from enum import Enum
+
+
+def _linear(x):
+    return x
+
+
+def _relu(x):
+    return np.maximum(0, x)
+
+
+def _sigmoid(x):
+    return 1 / (1 + np.e ** -x)
+
+
+def _tanh(x):
+    return 2 / (1 + np.e ** (-2 * x)) - 1
+
+
+def _linear_dx(x):
+    return np.ones_like(x)
+
+
+def _relu_dx(x):
+    return (x > 0).astype(int)
+
+
+def _sigmoid_dx(x):
+    return np.e ** x / (np.e ** -x + 1) ** 2
+
+
+def _tanh_dx(x):
+    return 4 * np.e ** (2 * x) / (np.e ** -(2 * x) + 1) ** 2
+
+
+class ActivationFunction(Enum):
+    RELU = partial(_relu)
+    SIGMOID = partial(_sigmoid)
+    TANH = partial(_tanh)
+    LINEAR = partial(_linear)
+
+    @property
+    def derivative(self):
+        if self == ActivationFunction.RELU:
+            return _relu_dx
+        elif self == ActivationFunction.SIGMOID:
+            return _sigmoid_dx
+        elif self == ActivationFunction.TANH:
+            return _tanh_dx
+        elif self == ActivationFunction.LINEAR:
+            return _linear_dx
+
+    def __call__(self, *args, **kwargs):
+        return self.value(*args, **kwargs)
 
 
 @dataclass
 class Node:
     activation: Callable
-    incoming_weights: np.ndarray[int]
-    outgoing_weights: np.ndarray[int]
+    is_intercept: bool = False
+    incoming_weights: np.ndarray = None
     input_val: int = 0
     output_val: int = 0
 
-    def __init__(self, input_size, activation, intercept=False):
-        self.incoming_weights = np.random.uniform(-1, 1, input_size).reshape((1, input_size))
-        self.outgoing_weights = np.random.uniform(-1, 1, input_size).reshape((1, input_size))
-
+    def __init__(self, activation, intercept=False):
         self.activation = activation
         if intercept:
-            self.input_value = 1
+            self.is_intercept = True
+            self.input_val = 1
             self.output_val = 1
 
     def activate(self):
@@ -26,166 +80,210 @@ class Node:
 
 
 @dataclass
-class Layer:
-    activation: Callable
+class MetaLayer(ABC):
     nodes: List[Node]
-    input_size: int
+    activation: ActivationFunction
+    is_output_layer: bool
 
-    def __init__(self, input_size, layer_size, activation):
+    @abstractmethod
+    def activate(self):
+        pass
+
+    @abstractmethod
+    def get_outputs(self):
+        pass
+
+    @abstractmethod
+    def get_inputs(self):
+        pass
+
+
+@dataclass
+class Layer(MetaLayer):
+    prev_layer: MetaLayer
+    is_output_layer = False
+
+    def __init__(self, layer_size, activation, prev_layer):
         self.activation = activation
-        self.input_size = input_size
-        self.nodes = [Node(input_size, activation, intercept=True)]
-        self.nodes = [Node(input_size, activation) for _ in range(layer_size)]
+        self.nodes = [Node(activation, intercept=True)]
+        self.nodes = self.nodes + [Node(activation) for _ in range(layer_size)]
+        self.prev_layer = prev_layer
+        if self.prev_layer is not None:
+            self.prev_layer.next_layer = self
 
     def activate(self):
         for node in self.nodes:
             node.activate()
 
     def get_outputs(self):
-        return np.ndarray(
-            buffer=(node.output_val for node in self.nodes),
-            shape=(1, len(self.nodes)))
+        if self.is_output_layer:
+            return np.asarray([node.output_val for node in self.nodes if not node.is_intercept])
+
+        return np.asarray([node.output_val for node in self.nodes])\
+            .reshape((1, len(self.nodes)))
+
+    def get_inputs(self):
+        # if self.is_output_layer:
+            return np.asarray([node.input_val for node in self.nodes if not node.is_intercept])\
+                .reshape(1, len(self.nodes) - 1)
+        # else:
+        #     return np.asarray([node.input_val for node in self.nodes])\
+        #         .reshape(1, len(self.nodes))
+
+    def update_weights(self, weights):
+        for node, weight in zip(self.nodes[1:], weights):
+            node.incoming_weights = weight
 
 
 @dataclass
-class NeuralNetwork():
+class NeuralNetwork(_BaseSGD):
     layers: List[Layer]
 
-    def __init__(self,
-                 layers,
-                 nodes,
-                 activations,
-                 max_iters_no_change=5,
-                 learning_rate=1e-3,
-                 batch_size=1,
-                 epsilon=1e-4,
-                 max_iters = 1e3):
+    def __init__(
+            self,
+            nodes: List[int],
+            activations: List[callable],
+            max_iters_no_change: int = 5,
+            learning_rate=1e-3,
+            batch_size: int = 1,
+            epsilon=1e-4,
+            max_iters: int = 1000):
+        super(NeuralNetwork, self).__init__()
         self.max_iters_no_change = max_iters_no_change
         self.learning_rate = learning_rate
-        self.batch_size = batch_size,
+        self.batch_size = batch_size
         self.epsilon = epsilon
-        self.max_iters = max_iters,
+        self.max_iters = max_iters
         self.layers = []
 
-        if len(layers) != len(nodes):
-            print('Length of nodes must be equal to the number of layers.')
-            return
         if len(activations) != len(nodes):
             print('Length of activation functions must be equal to the number of hidden layers.')
             return
-        layer_sizes = nodes
-        layer_sizes.insert(0, 0)
-        for prev_size, cur_size, act in zip(layer_sizes, layer_sizes[1:], activations):
-            self.layers.append(Layer(prev_size, cur_size, act))
+        # Copy and add 1 to layer sizes to have an output layer
+        layer_sizes = nodes.copy()
+        layer_sizes.append(1)
+        activations.append(ActivationFunction.LINEAR)
+        prev_layer = None
+        for cur_size, act in zip(layer_sizes, activations):
+            cur_layer = Layer(cur_size, act, prev_layer)
+            self.layers.append(cur_layer)
+            prev_layer = cur_layer
 
-    def _change_in_loss(self, x, y, prior_weights):
-        return NotImplementedError
+        self.layers[-1].is_output_layer = True
 
-    def _fit_by_back_prop(self, x, y):
-        # """
-        #         Calculates the gradient of the loss function for linear regression.
-        #
-        #         :param x: Column vector of explanatory variables
-        #         :param y: Column vector of dependent variables
-        #         :return: Vector of parameters for Linear Regression
-        #         """
-        # assert len(x) == len(y)
-        #
-        # # Reset model error calculations
-        # self.errors = []
-        # self.iterations = []
-        #
-        # # Setup Debugging/ Graphing
-        # start_time = timer()
-        # train_time = 0
-        #
-        # y0 = y.reshape(len(y), 1)  # Convert y to a column vector
-        #
-        # betas = np.zeros((len(x0[0]), 1))  # Makes a column vector of zeros
-        #
-        # n_iter = 0
-        # n_iters_no_change = 0
-        #
-        # while n_iters_no_change < self.max_iters_no_change and n_iter < self.max_iters:
-        #     permutation = np.random.permutation(x0.shape[0])
-        #     x0 = x0[permutation]
-        #     y0 = y0[permutation]
-        #
-        #     pre_epoch_betas = betas
-        #     # Iterate through all (X, Y) pairs where X is a vector of predictor variables [x1, x2, x3, ...]
-        #     # and Y is a vector containing the response variable
-        #     with np.errstate(invalid='raise'):
-        #         for v, w in zip(x0, y0):
-        #             v = v.reshape(1, len(v))
-        #             w = w.reshape(1, len(w))
-        #             prior_betas = betas
-        #             try:
-        #                 loss_change = self.learning_rate * self._change_in_loss(v, w, prior_betas)
-        #                 betas = np.subtract(prior_betas, loss_change)
-        #             except FloatingPointError:
-        #                 raise ConvergenceError()
-        #
-        #     total_error = np.sqrt(np.sum(np.subtract(betas, pre_epoch_betas) ** 2))
-        #     n_iters_no_change = n_iters_no_change + 1 if total_error < self.epsilon else 0
-        #     n_iter += 1
-        #     train_time = timer() - start_time
-        #     if verbose > 0:
-        #         print(
-        #             f'-- Epoch {n_iter}\n'
-        #             f'Total training time: {round(train_time, 3)}')
-        #         if verbose > 1:
-        #             print(f'Equation:\n'
-        #                   f'y = {np.round(betas[1:][0][0], 3)}(x1) + {np.round(betas[1:][1][0], 3)}(x2) + {np.round(betas[0][0], 3)}')
-        #         if verbose > 2:
-        #             print(
-        #                 f'Pre Epoch Betas:\n{pre_epoch_betas}\n'
-        #                 f'Post Epoch Betas:\n{betas}\n')
-        #     self.iterations.append(n_iter)
-        #     self.errors.append(total_error)
-        #
-        # self.coef_ = betas[1 if self.fit_intercept else 0:]
-        # self.intercept_ = betas[0][0] if self.fit_intercept else 0  # betas[0] gives a series with a single value
-        # if verbose > 0:
-        #     print(f'SGD converged after {n_iter} epochs.\n'
-        #           f'Total Training Time: {round(train_time, 3)} sec.')
-        #
-        # if n_iter == self.max_iters and self.errors[-1] > self.epsilon:
-        #     print(f'SGD did not converge after {self.max_iters} epochs. Increase max_iters for a better model.')
-        #
-        # return self
+    def _update_rule(self, x, y, w):
+        """
+        This is the method that updates the list of weight matrices for gradient descent
+
+        :param x: An mini-batch of observations that we want to make predictions about
+        :param y: The expected prediction for the observation(s)
+        :param w: The list of weight matrices for all layers in the model
+
+        :return: Returns the value that determines how much the weight matrices should change
+        """
+        total_weight_updates = []
+        for x0, y0 in zip(x, y.T):
+            weight_updates = []
+            x0 = x0.reshape(1, len(x0))
+            y0 = y0.reshape(1, len(y0))
+            # print(f'y: {y0}')
+            # print(f'x: {x0}')
+            # print(f'Prediction: {self.predict(x0)}')
+            delta_l1 = np.subtract(self.predict(x0), y0)
+            weights_l1 = None
+            for weights_l, l in zip(w[::-1], self.layers[::-1]):
+                activation_derivative = l.activation.derivative
+                z_l = l.get_inputs()
+                # print(f'z(l): {z_l}')
+                weights_l1 = np.asarray([1]) if l.is_output_layer else weights_l1[:, 1:]
+                # print(f'w(l+1): {weights_l1}')
+                g_primes = activation_derivative(z_l)
+                # print(f'g\'(z(l)): {g_primes}')
+
+                # print(f'd(l1): {delta_l1}')
+                # print(f'dw: {np.dot(delta_l1, weights_l1)}')
+                delta_l = np.multiply(
+                    np.dot(
+                        delta_l1,
+                        weights_l1),
+                    g_primes)
+                # print(f'd(l+1) * w(l+1): {np.dot(delta_l1, weights_l1)}')
+                # print(f'd(l): {delta_l}')
+
+                h_l1 = l.prev_layer.get_outputs() \
+                    if l.prev_layer is not None \
+                    else np.insert(x0, 0, 1).reshape(1, x0.shape[1] + 1)
+                # print(f'h(l-1): {h_l1}')
+                updates = np.outer(h_l1, delta_l)
+                # print(f'w(l): {weights_l}')
+                # print(f'∂C/∂w(l): {updates.T}')
+                weights_l1 = weights_l
+                delta_l1 = delta_l
+                weight_updates.append(updates.T)
+                # print()
+
+            if total_weight_updates is not None:
+                total_weight_updates = weight_updates
+            else:
+                total_weight_updates = \
+                    [np.add(w1, w2)
+                     for w1, w2
+                     in zip(total_weight_updates, weight_updates)]
+
+        # Reverse weights updates since we are iterating through the network in a backward direction
+        return total_weight_updates[::-1]
+
+    def _fit(self, x, y, **kwargs):
+        return super()._fit(x, y, **kwargs)
 
     def feed_forward(self, x):
-        input_layer = x.insert(0, 1)
+        input_layer = np.insert(x, 0, 1)
         for layer in self.layers:
             for node in layer.nodes:
-                node.input_val = np.dot(input_layer, node.incoming_weights)
-            input_layer = layer.get_outputs()
+                if node.is_intercept:
+                    node.input_val = 1
+                else:
+                    node.input_val = np.dot(input_layer, node.incoming_weights.T)
+                node.activate()
 
-        return input_layer
+            input_layer = layer.get_outputs()
+        return self.layers[-1].get_outputs()
 
     def predict(self, x):
-        return self.feed_forward(x)
+        return [self.feed_forward(v) for v in x]
 
-    def relu(self, x):
-        return np.max(0, x)
+    def initialize_weights(self, x_shape):
+        # We add 1 to the shape of the weights to account for the weight associated with the bias term
+        for layer in self.layers:
+            if layer.prev_layer is None:
+                for node in layer.nodes:
+                    if not node.is_intercept:
+                        node.incoming_weights = np.random.uniform(-0.5, 0.5, x_shape[1] + 1)
+            else:
+                for node in layer.nodes:
+                    if not node.is_intercept:
+                        node.incoming_weights = np.random.uniform(-0.5, 0.5, len(layer.prev_layer.nodes))
+        return self
 
-    def sigmoid(self, x):
-        return 1 / (1 + np.e ** -x)
+    def _loss(self, x, y):
+        return 0.5 * np.mean((np.subtract(self.predict(x), y)) ** 2)
 
-    def softmax(self, x):
-        return NotImplementedError
+    def get_weights(self):
+        weights = []
+        print(f'Num Layers: {len(self.layers)}')
+        for layer in self.layers:
+            weights.append(self.get_weights_at_layer(layer))
 
-    def tanh(self, x):
-        return 2 / (1 + np.e**(-2*x)) - 1
+        return weights
 
-    def relu_dx(self, x):
-        return 0 if x < 0 else 1
+    @staticmethod
+    def get_weights_at_layer(layer):
+        # weights = np.ndarray(
+        #     shape=[len(layer.get_inputs()), len(layer.nodes)],
+        #     buffer=[node.incoming_weights for node in layer.nodes if not node.is_intercept])
+        return np.asarray([node.incoming_weights for node in layer.nodes if not node.is_intercept])
 
-    def sigmoid_dx(self, x):
-        return np.e**x / (np.e**x + 1)**2
+    def update_model_params(self, weights):
+        for layer, weights in zip(self.layers, weights):
+            layer.update_weights(weights)
 
-    def softmax_dx(self, x):
-        return NotImplementedError
-
-    def tanh_dx(self, x):
-        return 4 * np.e**(2 * x) / (np.e**-(2 * x) + 1) ** 2
