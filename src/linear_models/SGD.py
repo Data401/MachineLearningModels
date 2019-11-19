@@ -52,7 +52,7 @@ class _BaseSGD(BaseModel):
         # Reset model error calculations
         self.errors = []
         self.iterations = []
-        self.loss = []
+        self.losses = []
 
         # Setup Debugging/ Graphing
         start_time = timer()
@@ -73,7 +73,6 @@ class _BaseSGD(BaseModel):
 
         n_iter = 0
         n_iters_no_change = 0
-        print(betas)
         while n_iters_no_change < self.max_iters_no_change and n_iter < self.max_iters:
             permutation = np.random.permutation(x0.shape[0])
             x_batches = np.array_split(x0[permutation], np.ceil(len(x0)/self.batch_size))
@@ -118,7 +117,7 @@ class _BaseSGD(BaseModel):
             self.update_model_params(betas)
 
             self.iterations.append(n_iter)
-            self.loss.append(self._loss(x, y))
+            # self.losses.append(self._loss(x, y))
             self.errors.append(total_error)
 
 
@@ -207,7 +206,7 @@ class SGDClassifier(_BaseSGD):
         self.alpha = alpha
         self.C = C
 
-    def _update_rule(self, x, y, b):
+    def _update_rule(self, x, y, w):
         """
         Returns the value of the gradient of the loss function with a L2 regularization term
         The gradient that is calculated by this method is determined by self.loss
@@ -217,22 +216,24 @@ class SGDClassifier(_BaseSGD):
 
         :param x0: Vector of predictor variables for a single observation
         :param y0: Vector containing the response variable for a single observation
-        :param b: vector of prior betas
+        :param w: vector of prior betas
         :return: COLUMN vector of changes to apply to COLUMN vector of betas
         """
         if self.loss == 'log':
-            xb = -(x.dot(b))
-            exp = np.exp(xb)
+            xw = -(x.dot(w))
+            exp = np.exp(xw)
             p = 1 / (1 + exp)
-            reg_term = np.multiply(self.alpha / len(b), b)
+            reg_term = np.multiply(self.alpha / len(w), w)
             reg_term[0] = 0
 
             change_in_loss = -np.dot(np.subtract(y, p), x).T
             return change_in_loss + reg_term
 
         elif self.loss == 'hinge':
-            xb = x.dot(b)[0][0]
-            return b - self.C * y.dot(x).T if y.dot(xb) < 1 else b
+            print(f'X: {x}')
+            print(f'w: {w}')
+            xw = x.dot(w)[0]
+            return w - self.C * y.dot(x).T if y.dot(xw) < 1 else w
 
     def predict(self, x):
         x0 = _convert_dataframe(x)
@@ -268,6 +269,22 @@ class SGDClassifier(_BaseSGD):
             return NotImplementedError
 
         return super()._fit(x, y0, **kwargs)
+
+    def _loss(self, x, y):
+        return NotImplementedError
+
+    def update_model_params(self, params):
+        print(f'Params: {params}')
+        self.coef_ = np.asarray(params).flatten()[1:]
+        self.intercept_ = np.asarray(params).flatten()[0]
+
+    def get_weights(self):
+        model_params = np.insert(self.coef_, 0, self.intercept_)
+        return model_params.reshape((len(model_params), 1))
+
+    def initialize_weights(self, x):
+        self.intercept_ = 1
+        self.coef_ = np.asarray(np.random.uniform(-1, 1, len(x)))
 
     def generate_2d_plot(self, x, y):
         ax = plt.gca()

@@ -17,7 +17,7 @@ def _convert_dataframe(x):
         if isinstance(x, np.ndarray):
             return x
         elif isinstance(x, list) or isinstance(x, pd.Series):
-            return np.asmatrix(x).reshape((len(x), 1))
+            return np.asarray(x).reshape((len(x), 1))
         else:
             return x.to_numpy().reshape(len(x), len(x.columns))
     except NameError:
@@ -100,11 +100,11 @@ class BaseModel(abc.ABC):
         plt.plot(self.iterations, self.errors)
 
     def plot_loss(self):
-        plt.title('Loss Function')
+        plt.title('Training Loss')
         plt.xlabel('Training Iterations')
         plt.ylabel('SSE Loss')
 
-        plt.plot(self.iterations, self.loss)
+        plt.plot(self.iterations, self.losses)
 
     def predict(self, x):
         """
@@ -132,8 +132,9 @@ class BaseModel(abc.ABC):
         :param metric - Scoring metric to use. Default is adjusted R^2. Can be one of: 'adj', 'r2', 'aic', 'bic'
         """
         x0 = _convert_dataframe(x)
-        predicted = self.predict(x0)
         y0 = _convert_dataframe(y).T
+        predicted = [pred[0] for pred in self.predict(x0)]
+
         if metric == 'adj':
             # 1 - (1 - R^2)(n-1/n-k-1)
             ssr = ((y0 - predicted) ** 2).sum()

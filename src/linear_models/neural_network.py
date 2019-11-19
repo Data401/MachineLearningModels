@@ -3,6 +3,7 @@ from typing import List, Callable
 from functools import partial
 from linear_models.SGD import _BaseSGD
 from abc import ABC, abstractmethod
+import matplotlib.pyplot as plt
 import numpy as np
 from enum import Enum
 
@@ -12,7 +13,8 @@ def _linear(x):
 
 
 def _relu(x):
-    return np.maximum(0, x)
+    # print(f'In Activation func: {x}')
+    return x if x > 0 else 0 # np.maximum(0, x)
 
 
 def _sigmoid(x):
@@ -97,6 +99,10 @@ class MetaLayer(ABC):
     def get_inputs(self):
         pass
 
+    @abstractmethod
+    def get_bias(self):
+        pass
+
 
 @dataclass
 class Layer(MetaLayer):
@@ -133,6 +139,9 @@ class Layer(MetaLayer):
     def update_weights(self, weights):
         for node, weight in zip(self.nodes[1:], weights):
             node.incoming_weights = weight
+
+    def get_bias(self):
+        return self.nodes[1].incoming_weights[0]  # This can be any node that isn't the intercept node
 
 
 @dataclass
@@ -189,7 +198,8 @@ class NeuralNetwork(_BaseSGD):
             # print(f'y: {y0}')
             # print(f'x: {x0}')
             # print(f'Prediction: {self.predict(x0)}')
-            delta_l1 = np.subtract(self.predict(x0), y0)
+            predictions = [pred[0] for pred in self.predict(x0)]
+            delta_l1 = np.subtract(predictions, y0)
             weights_l1 = None
             for weights_l, l in zip(w[::-1], self.layers[::-1]):
                 activation_derivative = l.activation.derivative
@@ -199,7 +209,7 @@ class NeuralNetwork(_BaseSGD):
                 # print(f'w(l+1): {weights_l1}')
                 g_primes = activation_derivative(z_l)
                 # print(f'g\'(z(l)): {g_primes}')
-
+                #
                 # print(f'd(l1): {delta_l1}')
                 # print(f'dw: {np.dot(delta_l1, weights_l1)}')
                 delta_l = np.multiply(
@@ -243,7 +253,7 @@ class NeuralNetwork(_BaseSGD):
                 if node.is_intercept:
                     node.input_val = 1
                 else:
-                    node.input_val = np.dot(input_layer, node.incoming_weights.T)
+                    node.input_val = np.dot(input_layer.flatten(), node.incoming_weights.T)
                 node.activate()
 
             input_layer = layer.get_outputs()
@@ -258,19 +268,21 @@ class NeuralNetwork(_BaseSGD):
             if layer.prev_layer is None:
                 for node in layer.nodes:
                     if not node.is_intercept:
-                        node.incoming_weights = np.random.uniform(-0.5, 0.5, x_shape[1] + 1)
+                        l1_len = x_shape[1]
+                        node.incoming_weights = np.insert(np.random.randn(l1_len) * np.sqrt(2/l1_len), 0, 0)
             else:
                 for node in layer.nodes:
                     if not node.is_intercept:
-                        node.incoming_weights = np.random.uniform(-0.5, 0.5, len(layer.prev_layer.nodes))
+                        l1_len = len(layer.prev_layer.nodes) - 1
+                        node.incoming_weights = np.insert(np.random.randn(l1_len) * np.sqrt(2/l1_len), 0, 0)
         return self
 
     def _loss(self, x, y):
-        return 0.5 * np.mean((np.subtract(self.predict(x), y)) ** 2)
+        predicted = [pred[0] for pred in self.predict(x)]
+        return 0.5 * np.mean((np.subtract(predicted, y)) ** 2)
 
     def get_weights(self):
         weights = []
-        print(f'Num Layers: {len(self.layers)}')
         for layer in self.layers:
             weights.append(self.get_weights_at_layer(layer))
 
@@ -278,12 +290,19 @@ class NeuralNetwork(_BaseSGD):
 
     @staticmethod
     def get_weights_at_layer(layer):
-        # weights = np.ndarray(
-        #     shape=[len(layer.get_inputs()), len(layer.nodes)],
-        #     buffer=[node.incoming_weights for node in layer.nodes if not node.is_intercept])
         return np.asarray([node.incoming_weights for node in layer.nodes if not node.is_intercept])
 
     def update_model_params(self, weights):
         for layer, weights in zip(self.layers, weights):
             layer.update_weights(weights)
 
+    def pprint(self):
+        for l in range(len(self.layers)):
+            layer = self.layers[l]
+            layer_weights = self.get_weights_at_layer(layer)[:, 1:]
+            layer_bias = layer.get_bias()
+            print(f'Layer {l}')
+            print(f'    weights:')
+            print(f'      {layer_weights}')
+            print(f'    bias:'
+                  f'      {layer_bias}')
