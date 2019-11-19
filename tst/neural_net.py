@@ -14,17 +14,17 @@ print(df.head())
 x = scaler.fit_transform(df.drop(['price_doc'], axis=1))
 y = scaler.fit_transform(df[['price_doc']])
 
-print(x.shape)
-print(y.shape)
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.33)
 
 nn = NeuralNetwork(
-    nodes=[3],
-    learning_rate=1e-9,
+    nodes=[6, 3, 4],
+    learning_rate=1e-8,
     batch_size=1,
-    epsilon=3e-9,
-    max_iters=10,
+    epsilon=1e-10,
+    max_iters=100,
     activations=[
+        ActivationFunction.RELU,
+        ActivationFunction.SIGMOID,
         ActivationFunction.RELU, ])
 
 nn.fit(x_train, y_train, verbose=1)
@@ -38,6 +38,8 @@ plt.subplot(211)
 plt.subplot(212)
 nn.plot_error()
 plt.show()
+
+print(f'MSE: {np.mean((nn.predict(x_test) - y_test)**2)}')
 
 
 

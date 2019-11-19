@@ -13,8 +13,7 @@ def _linear(x):
 
 
 def _relu(x):
-    # print(f'In Activation func: {x}')
-    return x if x > 0 else 0 # np.maximum(0, x)
+    return x if x > 0 else 0
 
 
 def _sigmoid(x):
@@ -129,12 +128,8 @@ class Layer(MetaLayer):
             .reshape((1, len(self.nodes)))
 
     def get_inputs(self):
-        # if self.is_output_layer:
             return np.asarray([node.input_val for node in self.nodes if not node.is_intercept])\
                 .reshape(1, len(self.nodes) - 1)
-        # else:
-        #     return np.asarray([node.input_val for node in self.nodes])\
-        #         .reshape(1, len(self.nodes))
 
     def update_weights(self, weights):
         for node, weight in zip(self.nodes[1:], weights):
